@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/consul/structs"
 	"github.com/hashicorp/consul/types"
 	"github.com/hashicorp/go-memdb"
@@ -89,6 +90,7 @@ func (s *StateStore) ensureRegistrationTxn(tx *memdb.Txn, idx uint64, req *struc
 		ID:              req.ID,
 		Node:            req.Node,
 		Address:         req.Address,
+		Datacenter:      req.Datacenter,
 		TaggedAddresses: req.TaggedAddresses,
 		Meta:            req.NodeMeta,
 	}
@@ -684,6 +686,7 @@ func (s *StateStore) parseServiceNodes(tx *memdb.Txn, ws memdb.WatchSet, service
 		node := n.(*structs.Node)
 		s.ID = node.ID
 		s.Address = node.Address
+		s.Datacenter = node.Datacenter
 		s.TaggedAddresses = node.TaggedAddresses
 		s.NodeMeta = node.Meta
 
@@ -883,7 +886,7 @@ func (s *StateStore) ensureCheckTxn(tx *memdb.Txn, idx uint64, hc *structs.Healt
 
 	// Use the default check status if none was provided
 	if hc.Status == "" {
-		hc.Status = structs.HealthCritical
+		hc.Status = api.HealthCritical
 	}
 
 	// Get the node
@@ -911,7 +914,7 @@ func (s *StateStore) ensureCheckTxn(tx *memdb.Txn, idx uint64, hc *structs.Healt
 	}
 
 	// Delete any sessions for this check if the health is critical.
-	if hc.Status == structs.HealthCritical {
+	if hc.Status == api.HealthCritical {
 		mappings, err := tx.Get("session_checks", "node_check", hc.Node, string(hc.CheckID))
 		if err != nil {
 			return fmt.Errorf("failed session checks lookup: %s", err)
@@ -1045,7 +1048,7 @@ func (s *StateStore) ChecksInState(ws memdb.WatchSet, state string) (uint64, str
 	// Query all checks if HealthAny is passed, otherwise use the index.
 	var iter memdb.ResultIterator
 	var err error
-	if state == structs.HealthAny {
+	if state == api.HealthAny {
 		iter, err = tx.Get("checks", "status")
 		if err != nil {
 			return 0, nil, fmt.Errorf("failed check lookup: %s", err)
@@ -1077,7 +1080,7 @@ func (s *StateStore) ChecksInStateByNodeMeta(ws memdb.WatchSet, state string, fi
 	// Query all checks if HealthAny is passed, otherwise use the index.
 	var iter memdb.ResultIterator
 	var err error
-	if state == structs.HealthAny {
+	if state == api.HealthAny {
 		iter, err = tx.Get("checks", "status")
 		if err != nil {
 			return 0, nil, fmt.Errorf("failed check lookup: %s", err)

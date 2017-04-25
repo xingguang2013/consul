@@ -15,10 +15,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/consul"
 	"github.com/hashicorp/consul/consul/structs"
 	"github.com/hashicorp/consul/logger"
-	"github.com/hashicorp/consul/testutil"
+	"github.com/hashicorp/consul/testrpc"
 	"github.com/hashicorp/consul/types"
 	"github.com/hashicorp/consul/version"
 	"github.com/hashicorp/go-uuid"
@@ -318,7 +319,7 @@ func TestAgent_ReconnectConfigSettings(t *testing.T) {
 	}()
 }
 
-func TestAgent_NodeID(t *testing.T) {
+func TestAgent_setupNodeID(t *testing.T) {
 	c := nextConfig()
 	c.NodeID = ""
 	dir, agent := makeAgent(t, c)
@@ -381,6 +382,42 @@ func TestAgent_NodeID(t *testing.T) {
 	}
 	if id := agent.consulConfig().NodeID; string(id) != "adf4238a-882b-9ddc-4a9d-5b6758e4159e" {
 		t.Fatalf("bad: %q vs. %q", id, newID)
+	}
+}
+
+func TestAgent_makeNodeID(t *testing.T) {
+	c := nextConfig()
+	c.NodeID = ""
+	dir, agent := makeAgent(t, c)
+	defer os.RemoveAll(dir)
+	defer agent.Shutdown()
+
+	// We should get a valid host-based ID initially.
+	id, err := agent.makeNodeID()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if _, err := uuid.ParseUUID(string(id)); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Calling again should yield the same ID since it's host-based.
+	another, err := agent.makeNodeID()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if id != another {
+		t.Fatalf("bad: %s vs %s", id, another)
+	}
+
+	// Turn off host-based IDs and try again. We should get a random ID.
+	agent.config.DisableHostNodeID = true
+	another, err = agent.makeNodeID()
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if id == another {
+		t.Fatalf("bad: %s vs %s", id, another)
 	}
 }
 
@@ -590,7 +627,7 @@ func TestAgent_AddCheck(t *testing.T) {
 		Node:    "foo",
 		CheckID: "mem",
 		Name:    "memory util",
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	chk := &CheckType{
 		Script:   "exit 0",
@@ -608,7 +645,7 @@ func TestAgent_AddCheck(t *testing.T) {
 	}
 
 	// Ensure our check is in the right state
-	if sChk.Status != structs.HealthCritical {
+	if sChk.Status != api.HealthCritical {
 		t.Fatalf("check not critical")
 	}
 
@@ -627,7 +664,7 @@ func TestAgent_AddCheck_StartPassing(t *testing.T) {
 		Node:    "foo",
 		CheckID: "mem",
 		Name:    "memory util",
-		Status:  structs.HealthPassing,
+		Status:  api.HealthPassing,
 	}
 	chk := &CheckType{
 		Script:   "exit 0",
@@ -645,7 +682,7 @@ func TestAgent_AddCheck_StartPassing(t *testing.T) {
 	}
 
 	// Ensure our check is in the right state
-	if sChk.Status != structs.HealthPassing {
+	if sChk.Status != api.HealthPassing {
 		t.Fatalf("check not passing")
 	}
 
@@ -664,7 +701,7 @@ func TestAgent_AddCheck_MinInterval(t *testing.T) {
 		Node:    "foo",
 		CheckID: "mem",
 		Name:    "memory util",
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	chk := &CheckType{
 		Script:   "exit 0",
@@ -719,7 +756,7 @@ func TestAgent_AddCheck_RestoreState(t *testing.T) {
 		CheckID: "baz",
 		TTL:     time.Minute,
 	}
-	err := agent.persistCheckState(ttl, structs.HealthPassing, "yup")
+	err := agent.persistCheckState(ttl, api.HealthPassing, "yup")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -744,7 +781,7 @@ func TestAgent_AddCheck_RestoreState(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing check")
 	}
-	if check.Status != structs.HealthPassing {
+	if check.Status != api.HealthPassing {
 		t.Fatalf("bad: %#v", check)
 	}
 	if check.Output != "yup" {
@@ -771,7 +808,7 @@ func TestAgent_RemoveCheck(t *testing.T) {
 		Node:    "foo",
 		CheckID: "mem",
 		Name:    "memory util",
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	chk := &CheckType{
 		Script:   "exit 0",
@@ -807,7 +844,7 @@ func TestAgent_updateTTLCheck(t *testing.T) {
 		Node:    "foo",
 		CheckID: "mem",
 		Name:    "memory util",
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	chk := &CheckType{
 		TTL: 15 * time.Second,
@@ -818,13 +855,13 @@ func TestAgent_updateTTLCheck(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	if err := agent.updateTTLCheck("mem", structs.HealthPassing, "foo"); err != nil {
+	if err := agent.updateTTLCheck("mem", api.HealthPassing, "foo"); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 
 	// Ensure we have a check mapping.
 	status := agent.state.Checks()["mem"]
-	if status.Status != structs.HealthPassing {
+	if status.Status != api.HealthPassing {
 		t.Fatalf("bad: %v", status)
 	}
 	if status.Output != "foo" {
@@ -837,7 +874,7 @@ func TestAgent_ConsulService(t *testing.T) {
 	defer os.RemoveAll(dir)
 	defer agent.Shutdown()
 
-	testutil.WaitForLeader(t, agent.RPC, "dc1")
+	testrpc.WaitForLeader(t, agent.RPC, "dc1")
 
 	// Consul service is registered
 	services := agent.state.Services()
@@ -1088,7 +1125,7 @@ func TestAgent_PersistCheck(t *testing.T) {
 		Node:    config.NodeName,
 		CheckID: "mem",
 		Name:    "memory check",
-		Status:  structs.HealthPassing,
+		Status:  api.HealthPassing,
 	}
 	chkType := &CheckType{
 		Script:   "/bin/true",
@@ -1161,7 +1198,7 @@ func TestAgent_PersistCheck(t *testing.T) {
 	if !ok {
 		t.Fatalf("bad: %#v", agent2.state.checks)
 	}
-	if result.Status != structs.HealthCritical {
+	if result.Status != api.HealthCritical {
 		t.Fatalf("bad: %#v", result)
 	}
 	if result.Name != "mem1" {
@@ -1187,7 +1224,7 @@ func TestAgent_PurgeCheck(t *testing.T) {
 		Node:    config.NodeName,
 		CheckID: "mem",
 		Name:    "memory check",
-		Status:  structs.HealthPassing,
+		Status:  api.HealthPassing,
 	}
 
 	file := filepath.Join(agent.config.DataDir, checksDir, checkIDHash(check.CheckID))
@@ -1223,7 +1260,7 @@ func TestAgent_PurgeCheckOnDuplicate(t *testing.T) {
 		Node:    config.NodeName,
 		CheckID: "mem",
 		Name:    "memory check",
-		Status:  structs.HealthPassing,
+		Status:  api.HealthPassing,
 	}
 
 	// First persist the check
@@ -1309,7 +1346,7 @@ func TestAgent_unloadChecks(t *testing.T) {
 		Node:        config.NodeName,
 		CheckID:     "service:redis",
 		Name:        "redischeck",
-		Status:      structs.HealthPassing,
+		Status:      api.HealthPassing,
 		ServiceID:   "redis",
 		ServiceName: "redis",
 	}
@@ -1490,7 +1527,7 @@ func TestAgent_Service_Reap(t *testing.T) {
 	}
 	chkTypes := CheckTypes{
 		&CheckType{
-			Status: structs.HealthPassing,
+			Status: api.HealthPassing,
 			TTL:    10 * time.Millisecond,
 			DeregisterCriticalServiceAfter: 100 * time.Millisecond,
 		},
@@ -1519,7 +1556,7 @@ func TestAgent_Service_Reap(t *testing.T) {
 	}
 
 	// Pass the TTL.
-	if err := agent.updateTTLCheck("service:redis", structs.HealthPassing, "foo"); err != nil {
+	if err := agent.updateTTLCheck("service:redis", api.HealthPassing, "foo"); err != nil {
 		t.Fatalf("err: %v", err)
 	}
 	if _, ok := agent.state.Services()["redis"]; !ok {
@@ -1564,7 +1601,7 @@ func TestAgent_Service_NoReap(t *testing.T) {
 	}
 	chkTypes := CheckTypes{
 		&CheckType{
-			Status: structs.HealthPassing,
+			Status: api.HealthPassing,
 			TTL:    10 * time.Millisecond,
 		},
 	}
@@ -1623,7 +1660,7 @@ func TestAgent_addCheck_restoresSnapshot(t *testing.T) {
 		Node:        config.NodeName,
 		CheckID:     "service:redis",
 		Name:        "redischeck",
-		Status:      structs.HealthPassing,
+		Status:      api.HealthPassing,
 		ServiceID:   "redis",
 		ServiceName: "redis",
 	}
@@ -1640,7 +1677,7 @@ func TestAgent_addCheck_restoresSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing check")
 	}
-	if check.Status != structs.HealthPassing {
+	if check.Status != api.HealthPassing {
 		t.Fatalf("bad: %s", check.Status)
 	}
 }
@@ -1713,7 +1750,7 @@ func TestAgent_checkStateSnapshot(t *testing.T) {
 		Node:        config.NodeName,
 		CheckID:     "service:redis",
 		Name:        "redischeck",
-		Status:      structs.HealthPassing,
+		Status:      api.HealthPassing,
 		ServiceID:   "redis",
 		ServiceName: "redis",
 	}
@@ -1744,7 +1781,7 @@ func TestAgent_checkStateSnapshot(t *testing.T) {
 	}
 
 	// Make sure state was restored
-	if out.Status != structs.HealthPassing {
+	if out.Status != api.HealthPassing {
 		t.Fatalf("should have restored check state")
 	}
 }
@@ -1760,7 +1797,7 @@ func TestAgent_loadChecks_checkFails(t *testing.T) {
 		Node:      config.NodeName,
 		CheckID:   "service:redis",
 		Name:      "redischeck",
-		Status:    structs.HealthPassing,
+		Status:    api.HealthPassing,
 		ServiceID: "nope",
 	}
 	if err := agent.persistCheck(check, nil); err != nil {
@@ -1798,7 +1835,7 @@ func TestAgent_persistCheckState(t *testing.T) {
 	}
 
 	// Persist some check state for the check
-	err := agent.persistCheckState(check, structs.HealthCritical, "nope")
+	err := agent.persistCheckState(check, api.HealthCritical, "nope")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -1823,7 +1860,7 @@ func TestAgent_persistCheckState(t *testing.T) {
 	if p.Output != "nope" {
 		t.Fatalf("bad: %#v", p)
 	}
-	if p.Status != structs.HealthCritical {
+	if p.Status != api.HealthCritical {
 		t.Fatalf("bad: %#v", p)
 	}
 
@@ -1846,7 +1883,7 @@ func TestAgent_loadCheckState(t *testing.T) {
 	}
 
 	// Persist the check state
-	err := agent.persistCheckState(check, structs.HealthPassing, "yup")
+	err := agent.persistCheckState(check, api.HealthPassing, "yup")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -1854,14 +1891,14 @@ func TestAgent_loadCheckState(t *testing.T) {
 	// Try to load the state
 	health := &structs.HealthCheck{
 		CheckID: "check1",
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	if err := agent.loadCheckState(health); err != nil {
 		t.Fatalf("err: %s", err)
 	}
 
 	// Should not have restored the status due to expiration
-	if health.Status != structs.HealthCritical {
+	if health.Status != api.HealthCritical {
 		t.Fatalf("bad: %#v", health)
 	}
 	if health.Output != "" {
@@ -1876,7 +1913,7 @@ func TestAgent_loadCheckState(t *testing.T) {
 
 	// Set a TTL which will not expire before we check it
 	check.TTL = time.Minute
-	err = agent.persistCheckState(check, structs.HealthPassing, "yup")
+	err = agent.persistCheckState(check, api.HealthPassing, "yup")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}
@@ -1887,7 +1924,7 @@ func TestAgent_loadCheckState(t *testing.T) {
 	}
 
 	// Should have restored
-	if health.Status != structs.HealthPassing {
+	if health.Status != api.HealthPassing {
 		t.Fatalf("bad: %#v", health)
 	}
 	if health.Output != "yup" {
@@ -1911,7 +1948,7 @@ func TestAgent_purgeCheckState(t *testing.T) {
 		CheckID: "check1",
 		TTL:     time.Minute,
 	}
-	err := agent.persistCheckState(check, structs.HealthPassing, "yup")
+	err := agent.persistCheckState(check, api.HealthPassing, "yup")
 	if err != nil {
 		t.Fatalf("err: %s", err)
 	}

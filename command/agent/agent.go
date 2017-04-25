@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/sha512"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hashicorp/consul/api"
 	"github.com/hashicorp/consul/consul"
 	"github.com/hashicorp/consul/consul/state"
 	"github.com/hashicorp/consul/consul/structs"
@@ -629,6 +631,11 @@ func (a *Agent) makeRandomID() (string, error) {
 // high for us if this changes, so we will persist it either way. This will let
 // gopsutil change implementations without affecting in-place upgrades of nodes.
 func (a *Agent) makeNodeID() (string, error) {
+	// If they've disabled host-based IDs then just make a random one.
+	if a.config.DisableHostNodeID {
+		return a.makeRandomID()
+	}
+
 	// Try to get a stable ID associated with the host itself.
 	info, err := host.Info()
 	if err != nil {
@@ -644,6 +651,17 @@ func (a *Agent) makeNodeID() (string, error) {
 			id, err)
 		return a.makeRandomID()
 	}
+
+	// Hash the input to make it well distributed. The reported Host UUID may be
+	// similar across nodes if they are on a cloud provider or on motherboards
+	// created from the same batch.
+	buf := sha512.Sum512([]byte(id))
+	id = fmt.Sprintf("%08x-%04x-%04x-%04x-%12x",
+		buf[0:4],
+		buf[4:6],
+		buf[6:8],
+		buf[8:10],
+		buf[10:16])
 
 	a.logger.Printf("[DEBUG] Using unique ID %q from host as node ID", id)
 	return id, nil
@@ -1161,7 +1179,7 @@ func (a *Agent) AddService(service *structs.NodeService, chkTypes CheckTypes, pe
 			Node:        a.config.NodeName,
 			CheckID:     types.CheckID(checkID),
 			Name:        fmt.Sprintf("Service '%s' check", service.Service),
-			Status:      structs.HealthCritical,
+			Status:      api.HealthCritical,
 			Notes:       chkType.Notes,
 			ServiceID:   service.ID,
 			ServiceName: service.Service,
@@ -1756,7 +1774,7 @@ func (a *Agent) loadChecks(conf *Config) error {
 		} else {
 			// Default check to critical to avoid placing potentially unhealthy
 			// services into the active pool
-			p.Check.Status = structs.HealthCritical
+			p.Check.Status = api.HealthCritical
 
 			if err := a.AddCheck(p.Check, p.ChkType, false, p.Token); err != nil {
 				// Purge the check if it is unable to be restored.
@@ -1866,7 +1884,7 @@ func (a *Agent) EnableServiceMaintenance(serviceID, reason, token string) error 
 		Notes:       reason,
 		ServiceID:   service.ID,
 		ServiceName: service.Service,
-		Status:      structs.HealthCritical,
+		Status:      api.HealthCritical,
 	}
 	a.AddCheck(check, nil, true, token)
 	a.logger.Printf("[INFO] agent: Service %q entered maintenance mode", serviceID)
@@ -1912,7 +1930,7 @@ func (a *Agent) EnableNodeMaintenance(reason, token string) {
 		CheckID: structs.NodeMaint,
 		Name:    "Node Maintenance Mode",
 		Notes:   reason,
-		Status:  structs.HealthCritical,
+		Status:  api.HealthCritical,
 	}
 	a.AddCheck(check, nil, true, token)
 	a.logger.Printf("[INFO] agent: Node entered maintenance mode")

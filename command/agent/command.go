@@ -100,6 +100,10 @@ func (c *Command) readConfig() *Config {
 	f.StringVar((*string)(&cmdConfig.NodeID), "node-id", "",
 		"A unique ID for this node across space and time. Defaults to a randomly-generated ID"+
 			" that persists in the data-dir.")
+	f.BoolVar(&cmdConfig.DisableHostNodeID, "disable-host-node-id", false,
+		"Setting this to true will prevent Consul from using information from the"+
+			" host to generate a node ID, and will cause Consul to generate a"+
+			" random node ID instead.")
 	f.StringVar(&dcDeprecated, "dc", "", "Datacenter of the agent (deprecated: use 'datacenter' instead).")
 	f.StringVar(&cmdConfig.Datacenter, "datacenter", "", "Datacenter of the agent.")
 	f.StringVar(&cmdConfig.DataDir, "data-dir", "", "Path to a data directory to store agent state.")
@@ -420,6 +424,13 @@ func (c *Command) readConfig() *Config {
 	// Verify the node metadata entries are valid
 	if err := structs.ValidateMetadata(config.Meta); err != nil {
 		c.Ui.Error(fmt.Sprintf("Failed to parse node metadata: %v", err))
+	}
+
+	// It doesn't make sense to include both UI options.
+	if config.EnableUi == true && config.UiDir != "" {
+		c.Ui.Error("Both the ui and ui-dir flags were specified, please provide only one")
+		c.Ui.Error("If trying to use your own web UI resources, use the ui-dir flag")
+		c.Ui.Error("If using Consul version 0.7.0 or later, the web UI is included in the binary so use ui to enable it")
 		return nil
 	}
 
@@ -1167,12 +1178,13 @@ WAIT:
 		// Agent is already shutdown!
 		return 0
 	}
-	c.Ui.Output(fmt.Sprintf("Caught signal: %v", sig))
 
-	// Skip SIGPIPE signals
+	// Skip SIGPIPE signals and skip logging whenever such signal is received as well
 	if sig == syscall.SIGPIPE {
 		goto WAIT
 	}
+
+	c.Ui.Output(fmt.Sprintf("Caught signal: %v", sig))
 
 	// Check if this is a SIGHUP
 	if sig == syscall.SIGHUP {
